@@ -19,13 +19,13 @@
 /* Includes ------------------------------------------------------------------*/
 #include "main.h"
 #include "cmsis_os.h"
-
+#include "stdio.h"
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
-#include "key.h"
+#include "ringbuffer.h"
+//#include "key.h"
 #include "bh.h"
 #include "uart_transmit.h"
-//#include "uart_transmit.h"
 //#include "test.h"
 /* USER CODE END Includes */
 
@@ -55,6 +55,8 @@ I2C_HandleTypeDef hi2c1;
 I2C_HandleTypeDef hi2c4;
 
 UART_HandleTypeDef huart1;
+DMA_HandleTypeDef hdma_usart1_rx;
+DMA_HandleTypeDef hdma_usart1_tx;
 
 /* Definitions for defaultTask */
 osThreadId_t defaultTaskHandle;
@@ -68,14 +70,19 @@ osThreadId_t KeyMonitorTaskHandle;
 const osThreadAttr_t KeyMonitorTask_attributes = {
   .name = "KeyMonitorTask",
   .stack_size = 128 * 4,
-  .priority = (osPriority_t) osPriorityHigh,
+  .priority = (osPriority_t) osPriorityNormal,
 };
 /* Definitions for KeyState */
 osThreadId_t KeyStateHandle;
 const osThreadAttr_t KeyState_attributes = {
   .name = "KeyState",
   .stack_size = 128 * 4,
-  .priority = (osPriority_t) osPriorityHigh,
+  .priority = (osPriority_t) osPriorityNormal,
+};
+/* Definitions for DataQueue */
+osMessageQueueId_t DataQueueHandle;
+const osMessageQueueAttr_t DataQueue_attributes = {
+  .name = "DataQueue"
 };
 /* Definitions for KeyPress_Sema_FromISR */
 osSemaphoreId_t KeyPress_Sema_FromISRHandle;
@@ -98,8 +105,13 @@ const osEventFlagsAttr_t key_pk3_attributes = {
   .name = "key_pk3"
 };
 /* USER CODE BEGIN PV */
-key_t* joy_down_button;
+//key_t* joy_down_button;
 bh1750_t* sensor1;
+uint8_t rxbuffer=0;
+uint8_t str_buffer[10]={};
+uint8_t enter_flag=0;
+uint8_t start_flag=0;
+ring_buffer_t ring_buffer;
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
@@ -108,6 +120,7 @@ static void MX_GPIO_Init(void);
 static void MX_USART1_UART_Init(void);
 static void MX_I2C1_Init(void);
 static void MX_CRC_Init(void);
+static void MX_DMA_Init(void);
 static void MX_I2C4_Init(void);
 void StartDefaultTask(void *argument);
 void KeyMonitorTask_Function(void *argument);
@@ -120,7 +133,37 @@ void KeyState_Function(void *argument);
 /* Private user code ---------------------------------------------------------*/
 /* USER CODE BEGIN 0 */
 
+#ifdef __GNUC__
+#define PUTCHAR_PROTOTYPE int __io_putchar(int ch)
+#else
+#define PUTCHAR_PROTOTYPE int fputc(int ch, FILE *f)
+#endif
 
+PUTCHAR_PROTOTYPE
+{
+	//HAL_UART_Transmit(&huart1, (uint8_t*)ch,sizeof(uint8_t),0);
+	HAL_UART_Transmit(&huart1, (uint8_t *)&ch, 1 ,0xFFFF);
+	return ch;
+}
+
+int _write(int file, char *ptr, int len)
+{
+	int DataIdx;
+	for (DataIdx = 0; DataIdx < len;DataIdx++)
+	{
+		__io_putchar(*ptr++);
+	}
+	return len;
+}
+/*
+int fputc(int ch,FILE *f)
+{
+
+	HAL_UART_Transmit(&huart1,(uint8_t*)&ch,1,1000);
+	while(_HAL_UART_GET_FLAG(&huart1,UART_FLAG_TC)!=SET);
+	return(ch);
+}
+*/
 /* USER CODE END 0 */
 
 /**
@@ -145,7 +188,7 @@ int main(void)
   Error_Handler();
   }
 /* USER CODE END Boot_Mode_Sequence_1 */
-  /* MCU Configuration-------------- ------------------------------------------*/
+  /* MCU Configuration--------------------------------------------------------*/
 
   /* Reset of all peripherals, Initializes the Flash interface and the Systick. */
   HAL_Init();
@@ -183,6 +226,7 @@ Error_Handler();
   MX_USART1_UART_Init();
   MX_I2C1_Init();
   MX_CRC_Init();
+  MX_DMA_Init();
   MX_I2C4_Init();
   /* USER CODE BEGIN 2 */
 
@@ -197,13 +241,13 @@ Error_Handler();
 
   /* Create the semaphores(s) */
   /* creation of KeyPress_Sema_FromISR */
-  KeyPress_Sema_FromISRHandle = osSemaphoreNew(1, 0, &KeyPress_Sema_FromISR_attributes);
+  KeyPress_Sema_FromISRHandle = osSemaphoreNew(1, 1, &KeyPress_Sema_FromISR_attributes);
 
   /* creation of Key_Sema_AfterShake */
-  Key_Sema_AfterShakeHandle = osSemaphoreNew(1, 0, &Key_Sema_AfterShake_attributes);
+  Key_Sema_AfterShakeHandle = osSemaphoreNew(1, 1, &Key_Sema_AfterShake_attributes);
 
   /* creation of KeyRelease_Sema_FromISR */
-  KeyRelease_Sema_FromISRHandle = osSemaphoreNew(1, 0, &KeyRelease_Sema_FromISR_attributes);
+  KeyRelease_Sema_FromISRHandle = osSemaphoreNew(1, 1, &KeyRelease_Sema_FromISR_attributes);
 
   /* USER CODE BEGIN RTOS_SEMAPHORES */
   /* add semaphores, ... */
@@ -212,6 +256,10 @@ Error_Handler();
   /* USER CODE BEGIN RTOS_TIMERS */
   /* start timers, add new ones, ... */
   /* USER CODE END RTOS_TIMERS */
+
+  /* Create the queue(s) */
+  /* creation of DataQueue */
+  DataQueueHandle = osMessageQueueNew (16, sizeof(uint8_t), &DataQueue_attributes);
 
   /* USER CODE BEGIN RTOS_QUEUES */
   /* add queues, ... */
@@ -222,10 +270,10 @@ Error_Handler();
   defaultTaskHandle = osThreadNew(StartDefaultTask, NULL, &defaultTask_attributes);
 
   /* creation of KeyMonitorTask */
-  //KeyMonitorTaskHandle = osThreadNew(KeyMonitorTask_Function, NULL, &KeyMonitorTask_attributes);
+  KeyMonitorTaskHandle = osThreadNew(KeyMonitorTask_Function, NULL, &KeyMonitorTask_attributes);
 
   /* creation of KeyState */
-  //KeyStateHandle = osThreadNew(KeyState_Function, NULL, &KeyState_attributes);
+  KeyStateHandle = osThreadNew(KeyState_Function, NULL, &KeyState_attributes);
 
   /* USER CODE BEGIN RTOS_THREADS */
   /* add threads, ... */
@@ -236,7 +284,7 @@ Error_Handler();
   key_pk3Handle = osEventFlagsNew(&key_pk3_attributes);
 
   /* USER CODE BEGIN RTOS_EVENTS */
-  joy_down_button = key_init(0,GPIOK,GPIO_PIN_3, KeyPress_Sema_FromISRHandle, KeyRelease_Sema_FromISRHandle, Key_Sema_AfterShakeHandle, key_pk3Handle, EXTI3_IRQn);
+  //joy_down_button = key_init(0,GPIOK,GPIO_PIN_3, KeyPress_Sema_FromISRHandle, KeyRelease_Sema_FromISRHandle, Key_Sema_AfterShakeHandle, key_pk3Handle, EXTI3_IRQn);
   sensor1 = bh1750_init(0,&hi2c4);
   /* add events, ... */
   /* USER CODE END RTOS_EVENTS */
@@ -470,8 +518,27 @@ static void MX_USART1_UART_Init(void)
     Error_Handler();
   }
   /* USER CODE BEGIN USART1_Init 2 */
-
+  //HAL_UART_Receive_IT(&huart1,&rxbuffer,1);
   /* USER CODE END USART1_Init 2 */
+
+}
+
+/**
+  * Enable DMA controller clock
+  */
+static void MX_DMA_Init(void)
+{
+
+  /* DMA controller clock enable */
+  __HAL_RCC_DMA1_CLK_ENABLE();
+
+  /* DMA interrupt init */
+  /* DMA1_Stream0_IRQn interrupt configuration */
+  HAL_NVIC_SetPriority(DMA1_Stream0_IRQn, 5, 0);
+  HAL_NVIC_EnableIRQ(DMA1_Stream0_IRQn);
+  /* DMA1_Stream1_IRQn interrupt configuration */
+  HAL_NVIC_SetPriority(DMA1_Stream1_IRQn, 5, 0);
+  HAL_NVIC_EnableIRQ(DMA1_Stream1_IRQn);
 
 }
 
@@ -524,6 +591,24 @@ static void MX_GPIO_Init(void)
 }
 
 /* USER CODE BEGIN 4 */
+void HAL_UART_RxCpltCallback(UART_HandleTypeDef *UartHandle)
+{
+	//HAL_UART_Transmit(&huart1,&rxbuffer,sizeof(rxbuffer),0);
+	ring_buffer_queue(&ring_buffer,rxbuffer);
+	if(rxbuffer==0x0A)
+	{
+		enter_flag = 1;
+	}
+	while(huart1.RxState!=HAL_UART_STATE_READY);
+	HAL_UART_Receive_IT(&huart1,&rxbuffer,1);
+}
+
+void HAL_UART_TxCpltCallback(UART_HandleTypeDef *UartHandle)
+{
+	//HAL_UART_Receive_IT(&huart1,&rxbuffer,1);
+	//transmit_done=0;
+	//rdy2transmit=0;
+}
 
 /* USER CODE END 4 */
 
@@ -538,13 +623,22 @@ void StartDefaultTask(void *argument)
 {
   /* USER CODE BEGIN 5 */
   sensor1->i2c_state=bh1750_startup(sensor1);
-  uint8_t flag = 0;
-  osDelay(10);
+  ring_buffer_init(&ring_buffer);
+  HAL_UART_Receive_IT(&huart1,&rxbuffer,1);
   /* Infinite loop */
   for(;;)
   {
-	flag = uart_monitor(&huart1,flag,sensor1);
-    osDelay(1000);
+	if(enter_flag==1)
+	{
+		start_flag = command_monitor(&huart1,ring_buffer,start_flag);
+		ring_buffer_init(&ring_buffer);
+		enter_flag=0;
+	}
+	if(start_flag==1)
+	{
+		uart_monitor(&huart1, sensor1);
+	}
+    osDelay(1);
   }
   /* USER CODE END 5 */
 }
@@ -559,10 +653,24 @@ void StartDefaultTask(void *argument)
 void KeyMonitorTask_Function(void *argument)
 {
   /* USER CODE BEGIN KeyMonitorTask_Function */
+  //HAL_UART_Receive_IT(&huart1,&rxbuffer,1);
   /* Infinite loop */
   for(;;)
   {
+	//HAL_UART_Receive(&huart1,rxbuffer,1,osWaitForever);
+	//while(huart1.RxState!=HAL_UART_STATE_READY);
+	//HAL_UART_Transmit(&huart1,rxbuffer,1,0);
 	//key_monitor(joy_down_button);
+	//if(receive_done==0){
+		//receive_done=1;
+		//HAL_UART_Receive_IT(&huart1,rxbuffer,1);
+	//}
+	//if(HAL_UART_Receive_IT(&huart1,&rxbuffer,1)==HAL_OK)
+	//{
+		//osMessageQueuePut(DataQueueHandle,&rxbuffer,0U,0U);
+		//HAL_UART_Transmit_IT(&huart1,&rxbuffer,1);
+		//while(huart1.gState != HAL_UART_STATE_READY);
+	//}
     osDelay(1);
   }
   /* USER CODE END KeyMonitorTask_Function */
@@ -581,6 +689,18 @@ void KeyState_Function(void *argument)
   /* Infinite loop */
   for(;;)
   {
+	//if(rdy2transmit==1&&transmit_done==0)
+	//{
+		//txbuffer=rxbuffer;
+		//strcpy(txbuffer,rxbuffer);
+		//transmit_done=1;
+		//HAL_UART_Transmit_IT(&huart1,txbuffer,sizeof(txbuffer));
+	//}
+	//uint8_t buffer2[10]={0};
+	//if(osMessageQueueGet(DataQueueHandle,&txbuffer,NULL,osWaitForever)==osOK)
+	//{
+	//	while(HAL_UART_Transmit_IT(&huart1,&rxbuffer,1)!=HAL_OK);
+	//}
 	//key_state_machine(joy_down_button);
     osDelay(1);
   }

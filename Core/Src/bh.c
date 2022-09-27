@@ -95,7 +95,7 @@ HAL_StatusTypeDef send_illuminance(bh1750_t* sensor,UART_HandleTypeDef* huart){
     }
   }
   data[5]=0x0A;
-  if((HAL_UART_Transmit(huart,&data[5-lenth],lenth+1,10))!=HAL_OK){
+  if((HAL_UART_Transmit_IT(huart,&data[5-lenth],lenth+1))!=HAL_OK){
     return HAL_ERROR;
   }
   //HAL_Delay(1000);
