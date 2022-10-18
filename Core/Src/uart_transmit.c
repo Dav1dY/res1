@@ -26,11 +26,13 @@ uint8_t command_monitor(UART_HandleTypeDef* uart_handle, ring_buffer_t ring_buff
 	}
 	uint8_t size = ring_buffer.head_index-ring_buffer.tail_index;
 	ring_buffer_dequeue_arr(&ring_buffer,(char *)&buffer[0],size);
-	if((buffer[0]==0x73)&&(buffer[1]==0x74)&&(buffer[2]==0x61)&&(buffer[3]==0x72)&&(buffer[4]==0x74)&&buffer[5]==0x0A){
+	if((buffer[0]==0x73)&&(buffer[1]==0x74)&&(buffer[2]==0x61)&&(buffer[3]==0x72)&&(buffer[4]==0x74)&&buffer[5]==0x0A)
+	{
 		HAL_UART_Transmit_IT(uart_handle,(uint8_t*)&buffer[0],size);
 		return 1;
 	}
-	else if((buffer[0]==0x73)&&(buffer[1]==0x74)&&(buffer[2]==0x6F)&&(buffer[3]==0x70)&&(buffer[4]==0x0A)){
+	else if((buffer[0]==0x73)&&(buffer[1]==0x74)&&(buffer[2]==0x6F)&&(buffer[3]==0x70)&&(buffer[4]==0x0A))
+	{
 		HAL_UART_Transmit_IT(uart_handle,(uint8_t*)&buffer[0],size);
 		return 0;
 	}

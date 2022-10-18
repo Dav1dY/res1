@@ -27,6 +27,7 @@
 #include "bh.h"
 #include "uart_transmit.h"
 //#include "test.h"
+#include "mpu6050.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -107,8 +108,9 @@ const osEventFlagsAttr_t key_pk3_attributes = {
 /* USER CODE BEGIN PV */
 //key_t* joy_down_button;
 bh1750_t* sensor1;
+mpu6050_t* sensor2;
 uint8_t rxbuffer=0;
-uint8_t str_buffer[10]={};
+uint8_t txbuffer=0;
 uint8_t enter_flag=0;
 uint8_t start_flag=0;
 ring_buffer_t ring_buffer;
@@ -155,15 +157,7 @@ int _write(int file, char *ptr, int len)
 	}
 	return len;
 }
-/*
-int fputc(int ch,FILE *f)
-{
 
-	HAL_UART_Transmit(&huart1,(uint8_t*)&ch,1,1000);
-	while(_HAL_UART_GET_FLAG(&huart1,UART_FLAG_TC)!=SET);
-	return(ch);
-}
-*/
 /* USER CODE END 0 */
 
 /**
@@ -270,10 +264,10 @@ Error_Handler();
   defaultTaskHandle = osThreadNew(StartDefaultTask, NULL, &defaultTask_attributes);
 
   /* creation of KeyMonitorTask */
-  KeyMonitorTaskHandle = osThreadNew(KeyMonitorTask_Function, NULL, &KeyMonitorTask_attributes);
+  //KeyMonitorTaskHandle = osThreadNew(KeyMonitorTask_Function, NULL, &KeyMonitorTask_attributes);
 
   /* creation of KeyState */
-  KeyStateHandle = osThreadNew(KeyState_Function, NULL, &KeyState_attributes);
+  //KeyStateHandle = osThreadNew(KeyState_Function, NULL, &KeyState_attributes);
 
   /* USER CODE BEGIN RTOS_THREADS */
   /* add threads, ... */
@@ -285,7 +279,8 @@ Error_Handler();
 
   /* USER CODE BEGIN RTOS_EVENTS */
   //joy_down_button = key_init(0,GPIOK,GPIO_PIN_3, KeyPress_Sema_FromISRHandle, KeyRelease_Sema_FromISRHandle, Key_Sema_AfterShakeHandle, key_pk3Handle, EXTI3_IRQn);
-  sensor1 = bh1750_init(0,&hi2c4);
+  //sensor1 = bh1750_init(0,&hi2c4);
+  sensor2 = MPU6050_t_INIT(&hi2c4);
   /* add events, ... */
   /* USER CODE END RTOS_EVENTS */
 
@@ -593,21 +588,24 @@ static void MX_GPIO_Init(void)
 /* USER CODE BEGIN 4 */
 void HAL_UART_RxCpltCallback(UART_HandleTypeDef *UartHandle)
 {
-	//HAL_UART_Transmit(&huart1,&rxbuffer,sizeof(rxbuffer),0);
-	ring_buffer_queue(&ring_buffer,rxbuffer);
+	HAL_UART_Transmit(&huart1,&rxbuffer,sizeof(rxbuffer),0);
+	osMessageQueuePut(DataQueueHandle,&rxbuffer,0U,0U);
+
+	//ring_buffer_queue(&ring_buffer,rxbuffer);
+
 	if(rxbuffer==0x0A)
 	{
 		enter_flag = 1;
 	}
 	while(huart1.RxState!=HAL_UART_STATE_READY);
 	HAL_UART_Receive_IT(&huart1,&rxbuffer,1);
+
+
 }
 
 void HAL_UART_TxCpltCallback(UART_HandleTypeDef *UartHandle)
 {
-	//HAL_UART_Receive_IT(&huart1,&rxbuffer,1);
-	//transmit_done=0;
-	//rdy2transmit=0;
+
 }
 
 /* USER CODE END 4 */
@@ -622,23 +620,39 @@ void HAL_UART_TxCpltCallback(UART_HandleTypeDef *UartHandle)
 void StartDefaultTask(void *argument)
 {
   /* USER CODE BEGIN 5 */
-  sensor1->i2c_state=bh1750_startup(sensor1);
-  ring_buffer_init(&ring_buffer);
-  HAL_UART_Receive_IT(&huart1,&rxbuffer,1);
+  //HAL_UART_Receive_IT(&huart1,&rxbuffer,1);
+  uint8_t flag = 0;
+  if(MPU6050_INIT(sensor2)==HAL_OK)
+  {
+	  //HAL_GPIO_TogglePin(GPIOI,GPIO_PIN_12); //for testing
+	  //uint8_t i = 5;
+	  //HAL_UART_Transmit(&huart1,i,1,0);
+	  flag = 1;
+  }
   /* Infinite loop */
   for(;;)
   {
-	if(enter_flag==1)
+	if(flag==1)
 	{
-		start_flag = command_monitor(&huart1,ring_buffer,start_flag);
-		ring_buffer_init(&ring_buffer);
-		enter_flag=0;
+		if(MPU6050_Read_TEMP(sensor2)==HAL_OK)
+		{
+			HAL_GPIO_TogglePin(GPIOI,GPIO_PIN_14);
+			if(HAL_UART_Transmit(&huart1,&sensor2->temp_data[0],1,0)==HAL_OK)
+			{
+				HAL_GPIO_TogglePin(GPIOI,GPIO_PIN_12);
+			}
+			else
+			{
+				HAL_GPIO_TogglePin(GPIOI,GPIO_PIN_13);
+			}
+		}
+		else
+		{
+			HAL_GPIO_TogglePin(GPIOI,GPIO_PIN_15);
+		}
 	}
-	if(start_flag==1)
-	{
-		uart_monitor(&huart1, sensor1);
-	}
-    osDelay(1);
+	//osMessageQueueGet(DataQueueHandle,&txbuffer,0U,osWaitForever);
+    osDelay(1000);
   }
   /* USER CODE END 5 */
 }
@@ -653,25 +667,23 @@ void StartDefaultTask(void *argument)
 void KeyMonitorTask_Function(void *argument)
 {
   /* USER CODE BEGIN KeyMonitorTask_Function */
-  //HAL_UART_Receive_IT(&huart1,&rxbuffer,1);
+  sensor1->i2c_state=bh1750_startup(sensor1);
+  ring_buffer_init(&ring_buffer);
+  HAL_UART_Receive_IT(&huart1,&rxbuffer,1);
   /* Infinite loop */
   for(;;)
   {
-	//HAL_UART_Receive(&huart1,rxbuffer,1,osWaitForever);
-	//while(huart1.RxState!=HAL_UART_STATE_READY);
-	//HAL_UART_Transmit(&huart1,rxbuffer,1,0);
-	//key_monitor(joy_down_button);
-	//if(receive_done==0){
-		//receive_done=1;
-		//HAL_UART_Receive_IT(&huart1,rxbuffer,1);
-	//}
-	//if(HAL_UART_Receive_IT(&huart1,&rxbuffer,1)==HAL_OK)
-	//{
-		//osMessageQueuePut(DataQueueHandle,&rxbuffer,0U,0U);
-		//HAL_UART_Transmit_IT(&huart1,&rxbuffer,1);
-		//while(huart1.gState != HAL_UART_STATE_READY);
-	//}
-    osDelay(1);
+  if(enter_flag==1)
+	{
+	start_flag = command_monitor(&huart1,ring_buffer,start_flag);
+	ring_buffer_init(&ring_buffer);
+	enter_flag=0;
+    }
+  if(start_flag==1)
+	{
+	uart_monitor(&huart1, sensor1);
+	}
+  osDelay(1);
   }
   /* USER CODE END KeyMonitorTask_Function */
 }
@@ -689,19 +701,6 @@ void KeyState_Function(void *argument)
   /* Infinite loop */
   for(;;)
   {
-	//if(rdy2transmit==1&&transmit_done==0)
-	//{
-		//txbuffer=rxbuffer;
-		//strcpy(txbuffer,rxbuffer);
-		//transmit_done=1;
-		//HAL_UART_Transmit_IT(&huart1,txbuffer,sizeof(txbuffer));
-	//}
-	//uint8_t buffer2[10]={0};
-	//if(osMessageQueueGet(DataQueueHandle,&txbuffer,NULL,osWaitForever)==osOK)
-	//{
-	//	while(HAL_UART_Transmit_IT(&huart1,&rxbuffer,1)!=HAL_OK);
-	//}
-	//key_state_machine(joy_down_button);
     osDelay(1);
   }
   /* USER CODE END KeyState_Function */

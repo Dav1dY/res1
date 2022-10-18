@@ -32,20 +32,17 @@ bh1750_t* bh1750_init(uint8_t ADDR_PIN,I2C_HandleTypeDef* i2c_handle)
   return sensor;
 }
 
-HAL_StatusTypeDef bh1750_startup(bh1750_t* sensor)
-{
-  if(bh1750_Send(sensor,POWER_ON)!=HAL_OK)
-  {
+HAL_StatusTypeDef bh1750_startup(bh1750_t* sensor){
+
+  if(bh1750_Send(sensor,POWER_ON)!=HAL_OK){
     return HAL_ERROR;
   };
   /*
-  if(bh1750_Send(sensor,BH_RESET)!=HAL_OK)
-  {
+  if(bh1750_Send(sensor,BH_RESET)!=HAL_OK){
     return HAL_ERROR;
   };
   */
-  if(bh1750_Send(sensor,CONTINUOUS_HRES)!=HAL_OK)
-  {
+  if(bh1750_Send(sensor,CONTINUOUS_HRES)!=HAL_OK){
     return HAL_ERROR;
   };
   /*
@@ -56,10 +53,8 @@ HAL_StatusTypeDef bh1750_startup(bh1750_t* sensor)
     return HAL_OK;
 }
 
-HAL_StatusTypeDef bh1750_Send(bh1750_t* sensor,uint8_t cmd)
-{
-  if(HAL_I2C_Master_Transmit(sensor->i2c_handle, sensor->send_address, &cmd, 1, 10)!=HAL_OK)
-  {
+HAL_StatusTypeDef bh1750_Send(bh1750_t* sensor,uint8_t cmd){
+  if(HAL_I2C_Master_Transmit(sensor->i2c_handle, sensor->send_address, &cmd, 1, 10)!=HAL_OK){
 	return HAL_ERROR;
   }
   return HAL_OK;
@@ -70,8 +65,7 @@ HAL_StatusTypeDef bh1750_Read(bh1750_t* sensor)
   sensor->buffer[0]=0;
   sensor->buffer[1]=0;
   //uint8_t tmp[2];
-  if(HAL_I2C_Master_Receive(sensor->i2c_handle, sensor->read_address, sensor->buffer, 2, 10)!=HAL_OK)
-  {
+  if(HAL_I2C_Master_Receive(sensor->i2c_handle, sensor->read_address, sensor->buffer, 2, 10)!=HAL_OK){
     return HAL_ERROR;
   }
   //sensor->buffer[0]=tmp[0];
@@ -79,8 +73,7 @@ HAL_StatusTypeDef bh1750_Read(bh1750_t* sensor)
   return HAL_OK;
 }
 
-HAL_StatusTypeDef b1750_ReadFromBuffer(bh1750_t* sensor)
-{
+HAL_StatusTypeDef b1750_ReadFromBuffer(bh1750_t* sensor){
   sensor->illuminance=0;
   sensor->illuminance=sensor->buffer[0];
   sensor->illuminance=((sensor->illuminance<<8)|sensor->buffer[1]);
@@ -88,29 +81,24 @@ HAL_StatusTypeDef b1750_ReadFromBuffer(bh1750_t* sensor)
   return HAL_OK;
 }
 
-HAL_StatusTypeDef send_illuminance(bh1750_t* sensor,UART_HandleTypeDef* huart)
-{
+HAL_StatusTypeDef send_illuminance(bh1750_t* sensor,UART_HandleTypeDef* huart){
   uint8_t data[6]={0};
   float tmp = sensor->illuminance/1.2;
   uint16_t lum = (uint16_t)tmp;
   int lenth = 1;
-  for(int i=0;i<5;i++)
-  {
+  for(int i=0;i<5;i++){
     data[i]=lum/(pow(10,(4-i)));
     lum=lum-data[i]*(pow(10,(4-i)));
     data[i]=data[i]+48;
   }
-  for(int i=0;i<5;i++)
-  {
-    if(data[i]!=48)
-    {
+  for(int i=0;i<5;i++){
+    if(data[i]!=48){
       lenth = 5-i;
       break;
     }
   }
   data[5]=0x0A;
-  if((HAL_UART_Transmit_IT(huart,&data[5-lenth],lenth+1))!=HAL_OK)
-  {
+  if((HAL_UART_Transmit_IT(huart,&data[5-lenth],lenth+1))!=HAL_OK){
     return HAL_ERROR;
   }
   //HAL_Delay(1000);
